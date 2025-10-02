@@ -143,3 +143,8 @@ logs/
 
 # trained models
 trained_models/
+
+.idea/
+.DS_Store
+scripts/
+test_grounds.py

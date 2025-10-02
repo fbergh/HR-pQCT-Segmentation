@@ -2,31 +2,33 @@
 Written by Nathan Neeteson
 Segment images using a trained U-Net and optionally, compare to reference segmentations.
 """
+import argparse
+import os
 
 import numpy as np
+import pandas as pd
 import torch
-from torchvision.transforms import Compose
 from torch.utils.data import DataLoader
+from torchvision.transforms import Compose
+from tqdm import tqdm
 
-from models.UNet import UNet
+from dataset.HRpQCTAIMDataset import HRpQCTAIMDataset
 from dataset.SamplePadder import SamplePadder
 from dataset.SampleStandardizer import SampleStandardizer
 from dataset.SampleToTensors import SampleToTensors
-from dataset.HRpQCTAIMDataset import HRpQCTAIMDataset
-from utils.logging import Logger
-
+from models.UNet import UNet
+from traintest.infer import infer
+from utils.image_export import save_mask_as_AIM, save_numpy_array_as_image
+from utils.logger import Logger
+from utils.postprocessing import postprocess_masks_iterative
 from utils.segmentation_evaluation import (
     calculate_dice_and_jaccard, calculate_surface_distance_measures
 )
 
-from utils.image_export import save_numpy_array_as_image, save_mask_as_AIM
-from utils.postprocessing import postprocess_masks_iterative
-from utils.image_export import save_mask_as_AIM
-
-from traintest.infer import infer
-
-import os
-import argparse
+# PROBLEM_FILES = ["c0002261_crop", "c0001139_crop"]
+# Problem files for the acon
+# PROBLEM_FILES = ["c0001139_crop", "c0002174_crop"]
+PROBLEM_FILES = []
 
 
 def check_odd_integer(value):
@@ -45,6 +47,16 @@ def create_parser():
     parser.add_argument(
         '--data-dir', type=str, default='./data/test/', metavar='STR',
         help='path of directory containing images to do inference on'
+    )
+
+    parser.add_argument(
+        '--predictions-suffix', type=str, default='scon', metavar='STR',
+        help='path of directory containing images to do inference on'
+    )
+
+    parser.add_argument(
+        '--data-pattern', type=str, default='*.AIM', metavar='STR',
+        help='glob-like data pattern for images to train/validate on'
     )
 
     parser.add_argument(
@@ -103,6 +115,15 @@ def create_parser():
     )
 
     parser.add_argument(
+        '--only-evaluate', action='store_true', default=False,
+        help='only evaluate quality of predictions, do not predict (requires reference and prediction masks)'
+    )
+
+    parser.add_argument(
+        '--prediction-path', default=".", help="Path to find predictions when only evaluating"
+    )
+
+    parser.add_argument(
         '--spacing', type=float, default=61e-6, metavar='S',
         help='isometric voxel width [m]'
     )
@@ -117,10 +138,20 @@ def create_parser():
         help='write the final masks out as aims'
     )
 
+    parser.add_argument(
+        '--write-embeddings', action='store_true', default=False,
+        help='write the final masks out as aims'
+    )
+
+    parser.add_argument(
+        '--except_path', type=str, metavar="STR"
+    )
+
     return parser
 
 
 def main():
+    print("Starting initialisation")
     parser = create_parser()
     args = parser.parse_args()
 
@@ -128,12 +159,11 @@ def main():
     plot_idx = 168 // 2
 
     # create predictions sub-directory
-    pred_dir = args.data_dir + 'predictions/'
-    if not (os.path.isdir(pred_dir)):
-        os.mkdir(pred_dir)
+    pred_dir = os.path.join(args.data_dir, 'predictions_' + args.predictions_suffix)
+    os.makedirs(pred_dir, exist_ok=True)
 
     if args.evaluate:
-        eval_file = pred_dir + 'evaluation.csv'
+        eval_file = os.path.join(pred_dir, 'evaluation.csv')
 
     # check what device to use
     device = torch.device("cuda" if (torch.cuda.is_available() and args.cuda) else "cpu")
@@ -154,8 +184,16 @@ def main():
         SampleToTensors(ohe=False)
     ])
 
+    exceptions = PROBLEM_FILES
+    if args.except_path:
+        # load exceptions: files that should be skipped because they have been processed or are wrong
+        exceptions_csv = pd.read_csv(args.except_path, delimiter=',')
+        exceptions = exceptions_csv['name'].to_list() + exceptions
+
     # create dataset
-    dataset = HRpQCT_AIM_Dataset(args.data_dir, transform=data_transforms, load_masks=args.load_ref_masks)
+    dataset = HRpQCTAIMDataset(args.data_dir, args.data_pattern, transform=data_transforms,
+                               load_masks=args.load_ref_masks, exceptions=exceptions,
+                               mask_type=args.predictions_suffix)
 
     # create kwargs for dataloader
     dataloader_kwargs = {
@@ -191,13 +229,17 @@ def main():
         eval_logger = Logger(eval_file, eval_fields)
 
     # iterate through the images
-    for idx, image in enumerate(dataloader):
+    print("Initialised. Starting evaluation")
+    for idx, image in enumerate(tqdm(dataloader)):
 
         labels = image['labels'][0, 0, :, :, :].cpu().detach().numpy()
         image_data = image['image'][0, 0, :, :, :].cpu().detach().numpy()
 
         cort_mask_reference = labels == 0
-        trab_mask_reference = labels == 1
+        if args.predictions_suffix == "xtremect1_periosteal":
+            trab_mask_reference = cort_mask_reference
+        else:
+            trab_mask_reference = labels == 1
 
         image_name = os.path.splitext(image['name'][0])[0]
 
@@ -210,10 +252,15 @@ def main():
         trab_mask = phi_endo < 0
 
         cort_mask_post, trab_mask_post = postprocess_masks_iterative(
-            image_data, cort_mask, trab_mask, visualize=args.visualize
+            image_data, cort_mask, trab_mask, visualize=args.visualize, pred_dir=pred_dir, image_name=image_name
         )
 
+        if args.predictions_suffix == "xtremect1_periosteal":
+            cort_mask = trab_mask = cort_mask + trab_mask
+            cort_mask_post = trab_mask_post = cort_mask_post + trab_mask_post
+
         if args.evaluate:
+            print("Writing metrics")
             eval_logger.set_field_value('name', image_name)
 
             dice_cort_raw, jaccard_cort_raw = calculate_dice_and_jaccard(cort_mask, cort_mask_reference)
@@ -231,18 +278,14 @@ def main():
             eval_logger.set_field_value('jaccard_cort_post', jaccard_cort_post)
             eval_logger.set_field_value('jaccard_trab_post', jaccard_trab_post)
 
-            ssd_cort_raw = calculate_surface_distance_measures(
-                cort_mask, cort_mask_reference, [args.spacing, args.spacing, args.spacing]
-            )
-            ssd_trab_raw = calculate_surface_distance_measures(
-                trab_mask, trab_mask_reference, [args.spacing, args.spacing, args.spacing]
-            )
-            ssd_cort_post = calculate_surface_distance_measures(
-                cort_mask_post, cort_mask_reference, [args.spacing, args.spacing, args.spacing]
-            )
-            ssd_trab_post = calculate_surface_distance_measures(
-                trab_mask_post, trab_mask_reference, [args.spacing, args.spacing, args.spacing]
-            )
+            ssd_cort_raw = calculate_surface_distance_measures(cort_mask, cort_mask_reference,
+                                                               [args.spacing, args.spacing, args.spacing])
+            ssd_trab_raw = calculate_surface_distance_measures(trab_mask, trab_mask_reference,
+                                                               [args.spacing, args.spacing, args.spacing])
+            ssd_cort_post = calculate_surface_distance_measures(cort_mask_post, cort_mask_reference,
+                                                                [args.spacing, args.spacing, args.spacing])
+            ssd_trab_post = calculate_surface_distance_measures(trab_mask_post, trab_mask_reference,
+                                                                [args.spacing, args.spacing, args.spacing])
 
             eval_logger.set_field_value('ssd_max_cort_raw', ssd_cort_raw['max'])
             eval_logger.set_field_value('ssd_max_trab_raw', ssd_trab_raw['max'])
@@ -256,27 +299,45 @@ def main():
 
             eval_logger.log()
 
-        if args.visualize:
-
-            save_numpy_array_as_image(image_data, f'{pred_dir}{image_name}_image_data.vtk')
-
-            save_numpy_array_as_image(phi_peri, f'{pred_dir}{image_name}_embedding_periosteal.vtk')
-            save_numpy_array_as_image(phi_endo, f'{pred_dir}{image_name}_embedding_endosteal.vtk')
-
-            save_numpy_array_as_image(cort_mask_reference.astype(np.int),
-                                      f'{pred_dir}{image_name}_cort_mask_reference.vtk')
-            save_numpy_array_as_image(trab_mask_reference.astype(np.int),
-                                      f'{pred_dir}{image_name}_trab_mask_reference.vtk')
-
-            save_numpy_array_as_image(cort_mask.astype(np.int), f'{pred_dir}{image_name}_cort_mask_raw.vtk')
-            save_numpy_array_as_image(trab_mask.astype(np.int), f'{pred_dir}{image_name}_trab_mask_raw.vtk')
-
-            save_numpy_array_as_image(cort_mask_post.astype(np.int), f'{pred_dir}{image_name}_cort_mask_post.vtk')
-            save_numpy_array_as_image(trab_mask_post.astype(np.int), f'{pred_dir}{image_name}_trab_mask_post.vtk')
+        if args.write_embeddings:
+            os.makedirs(f"{pred_dir}/embeddings/", exist_ok=True)
+            np.savez_compressed(f"{pred_dir}/embeddings/{image_name}_embed.npz",
+                                endosteal=phi_endo, periosteal=phi_peri)
 
         if args.write_aims:
+            os.makedirs(f"{pred_dir}/masks/raw/", exist_ok=True)
+            os.makedirs(f"{pred_dir}/masks/pp/", exist_ok=True)
+            print("Writing AIMs")
             save_mask_as_AIM(
-                f'{pred_dir}/{image_name}_CORT_MASK.AIM',
+                f'{pred_dir}/masks/raw/{image_name}_CORT_MASK.AIM',
+                cort_mask,
+                image['image_position'],
+                image['image_position_original'],
+                image['image_shape_original'],
+                image['spacing'],
+                image['origin'],
+                image['processing_log'][0],
+                'Cortical mask',
+                'UNet',
+                'unreleased'
+            )
+
+            save_mask_as_AIM(
+                f'{pred_dir}/masks/raw/{image_name}_TRAB_MASK.AIM',
+                trab_mask,
+                image['image_position'],
+                image['image_position_original'],
+                image['image_shape_original'],
+                image['spacing'],
+                image['origin'],
+                image['processing_log'][0],
+                'Trabecular mask',
+                'UNet',
+                'unreleased'
+            )
+
+            save_mask_as_AIM(
+                f'{pred_dir}/masks/pp/{image_name}_CORT_MASK.AIM',
                 cort_mask_post,
                 image['image_position'],
                 image['image_position_original'],
@@ -290,7 +351,7 @@ def main():
             )
 
             save_mask_as_AIM(
-                f'{pred_dir}/{image_name}_TRAB_MASK.AIM',
+                f'{pred_dir}/masks/pp/{image_name}_TRAB_MASK.AIM',
                 trab_mask_post,
                 image['image_position'],
                 image['image_position_original'],

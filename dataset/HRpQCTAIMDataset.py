@@ -10,10 +10,40 @@ from torch.utils.data import Dataset
 
 class HRpQCTAIMDataset(Dataset):
 
-    def __init__(self, data_dir, data_pattern, transform=None, load_masks=True):
+    def __init__(self, data_dir, data_pattern, transform=None, load_masks=True, exceptions=None, mask_type="scon"):
+        cort_mask_name = "_cort_mask.aim"
+        trab_mask_name = "_trab_mask.aim"
+        if mask_type == "scon":
+            cort_mask_name = "_cort_mask_scon.aim"
+            trab_mask_name = "_trab_mask_scon.aim"
+        if mask_type == "acon":
+            cort_mask_name = "_crmsk_a.aim"
+            trab_mask_name = "_trmsk_a.aim"
+        if mask_type == "xtremect1":
+            cort_mask_name = "_CORT_MASK.AIM"
+            trab_mask_name = "_TRAB_MASK.AIM"
+        if mask_type == "xtremect1_periosteal":
+            cort_mask_name = "_MASK.AIM"
+            trab_mask_name = "_MASK.AIM"
 
         # the image files should have the pattern <study>_<ID#>_<site_code>.AIM
-        image_file_list = glob(os.path.join(data_dir, data_pattern))
+        image_file_list = list(glob(os.path.join(data_dir, data_pattern)))
+
+        idcs_to_remove = []
+        for i, img_file in enumerate(image_file_list):
+            img_name = os.path.splitext(os.path.basename(img_file))[0]
+            image_file_noext = os.path.splitext(img_file)[0]
+            if '_crop' in image_file_noext:
+                img_file_no_crop = image_file_noext[:-image_file_noext[::-1].index('_') - 1]
+            else:
+                img_file_no_crop = image_file_noext
+            if (exceptions is not None and len(exceptions) > 0 and img_name in exceptions) \
+                    or not os.path.exists(img_file_no_crop + cort_mask_name) \
+                    or not os.path.exists(img_file_no_crop + trab_mask_name):
+                print("removing", img_name)
+                idcs_to_remove.append(i)
+        for i in reversed(idcs_to_remove):
+            del image_file_list[i]
 
         self.data = {
             'image': [],
@@ -24,27 +54,23 @@ class HRpQCTAIMDataset(Dataset):
         # each image in the directory also needs to have both a cort and trab
         # mask, so get those right now
         for image_file in image_file_list:
-
             self.data['image'].append(image_file)
-
             image_file_noext = os.path.splitext(image_file)[0]
-
             if load_masks:
-
-                cort_mask_file = image_file_noext + '_CORT_MASK.AIM'
-
+                if '_crop' in image_file_noext:
+                    img_file_no_crop = image_file_noext[:-image_file_noext[::-1].index('_') - 1]
+                else:
+                    img_file_no_crop = image_file_noext
+                cort_mask_file = img_file_no_crop + cort_mask_name
                 if os.path.exists(cort_mask_file):
                     self.data['cort_mask'].append(cort_mask_file)
                 else:
                     raise Exception(f'Expected file, {cort_mask_file}, does not exist.')
-
-                trab_mask_file = image_file_noext + '_TRAB_MASK.AIM'
-
+                trab_mask_file = img_file_no_crop + trab_mask_name
                 if os.path.exists(trab_mask_file):
                     self.data['trab_mask'].append(trab_mask_file)
                 else:
                     raise Exception(f'Expected file, {trab_mask_file}, does not exist.')
-
             else:
                 self.data['cort_mask'].append(None)
                 self.data['trab_mask'].append(None)
@@ -63,8 +89,10 @@ class HRpQCTAIMDataset(Dataset):
         return len(self.data['image'])
 
     def __getitem__(self, idx):
-
         sample = {}
+
+        sample['name'] = os.path.basename(self.data['image'][idx])
+        print(f"Loading {sample['name']}")
 
         sample['image'], sample['image_position'] = \
             self._get_image_data_and_position(self.data['image'][idx], True)
@@ -86,15 +114,12 @@ class HRpQCTAIMDataset(Dataset):
             sample['cort_mask_position'] = sample['image_position'].copy()
             sample['trab_mask_position'] = sample['image_position'].copy()
 
-        sample['name'] = os.path.basename(self.data['image'][idx])
-
         if self.transform:
             sample = self.transform(sample)
 
         return sample
 
     def _get_image_data_and_position(self, filename, convert_to_density=False):
-
         self.reader.SetFileName(filename)
         self.reader.Update()
 

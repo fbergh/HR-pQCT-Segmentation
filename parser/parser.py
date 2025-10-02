@@ -14,7 +14,10 @@ def create_parser():
         description='HRpQCT Segmentation 2D UNet Training Script',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
+    parser.add_argument(
+        '--data-pattern', type=str, default='*.AIM', metavar='STR',
+        help='glob-like data pattern for images to train/validate on'
+    )
     parser.add_argument(
         '--label', type=str, default='U-Net-2D', metavar='STR',
         help='base label for output files'

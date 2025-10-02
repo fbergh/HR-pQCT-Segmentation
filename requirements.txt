@@ -1,0 +1,16 @@
+pandas
+torchmetrics
+jupyterlab
+torchvision
+matplotlib
+
+scikit-learn
+simpleitk
+pytorch-lightning
+torch
+h5py
+scipy
+vtk
+scikit-image
+statsmodels
+seaborn

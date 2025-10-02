@@ -26,15 +26,17 @@ def single_mask_plot(ax, m, label):
     ax.set_title(label)
 
 
-def debug_mask_plot(m, title, filename=None):
-    fig, axs = plt.subplots(1, 3, figsize=(12, 5), sharex=True, sharey=True)
+def debug_mask_plot(m, title, slice_idx=None, filename=None):
+    if slice_idx is None:
+        slice_idx = m.shape[2] // 2
 
-    plt.imshow(m[:, :, m.shape[2] // 2], cmap='binary')
+    fig, ax = plt.subplots(1, 1)
 
-    labels = ['y-z', 'x-z', 'x-y']
-
-    for i in range(0, 3):
-        single_mask_plot(axs[i], np.swapaxes(m, i, 2)[:, :, m.shape[i] // 2], labels[i])
+    ax.imshow(m[:, :, slice_idx], cmap='binary')
+    ax.set_frame_on(False)
+    ax.axes.get_xaxis().set_visible(False)
+    ax.axes.get_yaxis().set_visible(False)
+    ax.set_title('x-y')
 
     fig.suptitle(title)
 
@@ -42,6 +44,7 @@ def debug_mask_plot(m, title, filename=None):
         plt.savefig(filename, dpi=300)
     else:
         plt.show()
+    plt.close(plt.gcf())
 
 
 def convert_mask_to_polydata(mask):
@@ -128,6 +131,7 @@ def keep_largest_connected_component_skimage(mask, background=False):
     mask = np.logical_not(mask) if background else mask
 
     mask = sklabel(mask, background=0)
+    # print('before argmax', mask.shape, np.any(mask), np.all(mask), np.all(~mask), background)
     mask = mask == np.argmax(np.bincount(mask.flat)[1:]) + 1
 
     mask = np.logical_not(mask) if background else mask
@@ -244,30 +248,43 @@ def postprocess_masks_iterative(
         n_gaps=15,
         min_cort_thickness=8,
         morph_bone_threshold=0,
-        visualize=False
+        visualize=False,
+        pred_dir="",
+        image_name="",
+        slice_idx=None
 ):
     if visualize:
-        debug_mask_plot(trab_mask, '0a. Trabecular mask, input', filename='postproc0a_trab_initial.png')
-        debug_mask_plot(cort_mask, '0b. Cortical mask, input', filename='postproc0b_cort_initial.png')
+        debug_mask_plot(trab_mask, f'0a. Trabecular mask, input (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp0a_trab_initial.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
+        debug_mask_plot(cort_mask, f'0b. Cortical mask, input (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp0b_cort_initial.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 1: Iteratively filter the trabecular mask
     trab_mask = iterative_filter(trab_mask, n_islands, n_gaps)
 
     if visualize:
-        debug_mask_plot(trab_mask, '1. Trabecular mask, iteratively filtered', filename='postproc1_trab_filtered.png')
+        debug_mask_plot(trab_mask, f'1. Trabecular mask, iteratively filtered (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp1_trab_filtered.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 2: Generate minimum cortical shell by dilating and subtracting
     #   trabecular mask
     min_cort_mask = dilate_and_subtract(trab_mask, min_cort_thickness)
 
     if visualize:
-        debug_mask_plot(min_cort_mask, '2. Cortical mask, minimum', filename='postproc2_cort_minimum.png')
+        debug_mask_plot(min_cort_mask, f'2. Cortical mask, minimum (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp2_cort_minimum.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 3: Generate a morphological estimate of the bone mask from the image
     morph_bone_mask = extract_bone(image, threshold=morph_bone_threshold)
 
     if visualize:
-        debug_mask_plot(morph_bone_mask, '3. Bone mask, morphological', filename='postproc3_bone_morphological.png')
+        debug_mask_plot(morph_bone_mask, f'3. Bone mask, morphological (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp3_bone_morphological.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 4: Create the bone mask by the union of the trabecular, cortical,
     #   minimum cortical, and morphological bone masks
@@ -279,19 +296,25 @@ def postprocess_masks_iterative(
     del morph_bone_mask
 
     if visualize:
-        debug_mask_plot(bone_mask, '4. Bone mask, composed', filename='postproc4_bone_composed.png')
+        debug_mask_plot(bone_mask, f'4. Bone mask, composed (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp4_bone_composed.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 5: Iteratively filter the bone mask
     bone_mask = iterative_filter(bone_mask, n_islands, n_gaps)
 
     if visualize:
-        debug_mask_plot(bone_mask, '5. Bone mask, filtered', filename='postproc5_bone_filtered.png')
+        debug_mask_plot(bone_mask, f'5. Bone mask, filtered (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp5_bone_filtered.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     # Step 6: Extract the cortical mask by subtracting the trabecular mask from
     #   the final bone mask
     cort_mask = np.logical_and(bone_mask, np.logical_not(trab_mask))
 
     if visualize:
-        debug_mask_plot(cort_mask, '6. Cort mask, extracted', filename='postproc6_cort_extracted.png')
+        debug_mask_plot(cort_mask, f'6. Cort mask, extracted (slice={slice_idx})',
+                        filename=f'{pred_dir}/{image_name}_pp6_cort_extracted.png' if pred_dir and image_name else None,
+                        slice_idx=slice_idx)
 
     return cort_mask, trab_mask

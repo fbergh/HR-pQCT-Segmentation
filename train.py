@@ -24,7 +24,7 @@ from dataset.SampleStandardizer import SampleStandardizer
 from dataset.SampleToTensors import SampleToTensors
 from dataset.HRpQCTAIMDataset import HRpQCTAIMDataset
 from utils.optimizer_scheduling import OptimizerSchedulerLinear
-from utils.logging import Logger
+from utils.logger import Logger
 
 from parser.parser import create_parser
 from traintest.traintest import traintest
@@ -76,8 +76,8 @@ def main():
     ])
 
     # create datasets
-    training_dataset = HRpQCTAIMDataset(args.training_data_dir, transform=data_transforms)
-    validation_dataset = HRpQCTAIMDataset(args.validation_data_dir, transform=data_transforms)
+    training_dataset = HRpQCTAIMDataset(args.training_data_dir, args.data_pattern, transform=data_transforms)
+    validation_dataset = HRpQCTAIMDataset(args.validation_data_dir, args.data_pattern, transform=data_transforms)
 
     # construct dictionary of testing functions
     testing_functions = {

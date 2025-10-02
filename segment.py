@@ -1,9 +1,10 @@
 import os
+
+import numpy as np
 import torch
 import yaml
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-from glob import glob
 from torchvision.transforms import Compose
 from torch.utils.data import DataLoader
 from timeit import default_timer as timer
@@ -11,7 +12,6 @@ from timeit import default_timer as timer
 from dataset.SamplePadder import SamplePadder
 from dataset.SampleStandardizer import SampleStandardizer
 from dataset.SampleToTensors import SampleToTensors
-from dataset.HRpQCTAIMDataset import HRpQCTAIMDataset
 
 from utils.postprocessing import postprocess_masks_iterative
 from utils.image_export import save_mask_as_AIM
@@ -55,6 +55,14 @@ def create_parser():
         "--cuda", "-c", action="store_true",
         help="enable this flag to use CUDA / GPU"
     )
+    parser.add_argument(
+        "--do_post", "-p", action="store_true",
+        help="enable this flag to do postprocessing"
+    )
+    parser.add_argument(
+        '--predictions-suffix', type=str, default='scon', metavar='STR',
+        help='path of directory containing images to do inference on'
+    )
 
     return parser
 
@@ -71,7 +79,7 @@ def main():
 
     # create the masks' subdirectory if it doesn't already exist
     try:
-        os.mkdir(os.path.join(args.image_directory, args.masks_subdirectory))
+        os.makedirs(os.path.join(args.image_directory, args.masks_subdirectory))
     except FileExistsError:
         pass  # if the directory already exists, that's fine
 
@@ -111,8 +119,9 @@ def main():
     ])
 
     # create dataset
-    dataset = HRpQCTAIMDataset(args.image_directory, args.image_pattern, transform=transforms, load_masks=False)
-    print(f"# images to be segmented: {len(dataset)}")
+    dataset = HRpQCTAIMDataset(args.image_directory, args.image_pattern, transform=transforms, load_masks=False,
+                               mask_type=args.predictions_suffix)
+    print(f"# images to be segmented: {len(dataset)}", flush=True)
 
     # create kwargs for dataloader
     dataloader_kwargs = {
@@ -145,20 +154,49 @@ def main():
             None, model, device, image,
             image_dataset_kwargs, image_dataloader_kwargs
         )
-        print(f"done! ({timer()-start_time:0.3f} s)")
+        # np.save(os.path.join(args.image_directory, 'embedding', f'{image_name}_peri_embedding.npy'), phi_peri)
+        # np.save(os.path.join(args.image_directory, 'embedding', f'{image_name}_endo_embedding.npy'), phi_endo)
+        print(f"done! ({timer()-start_time:0.3f} s)", flush=True)
         # convert embeddings to masks
         print("- converting embeddings to masks... ", end="")
         start_time = timer()
         cort_mask = (phi_peri < 0) * (phi_endo > 0)
         trab_mask = phi_endo < 0
-        print(f"done! ({timer()-start_time:0.3f} s)")
+        print(f"done! ({timer()-start_time:0.3f} s)", flush=True)
         # post-process masks
         print("- post-processing masks... ", end="")
         start_time = timer()
-        cort_mask, trab_mask = postprocess_masks_iterative(
-            image_data, cort_mask, trab_mask, visualize=False
-        )
-        print(f"done! ({timer()-start_time:0.3f} s)")
+        if args.do_post:
+            save_mask_as_AIM(
+                os.path.join(args.image_directory, args.masks_subdirectory, f"{image_name}_CORT_MASK_RAW.AIM"),
+                cort_mask,
+                image['image_position'],
+                image['image_position_original'],
+                image['image_shape_original'],
+                image['spacing'],
+                image['origin'],
+                image['processing_log'][0],
+                'Cortical mask',
+                'UNet with post-processing',
+                VERSION
+            )
+            save_mask_as_AIM(
+                os.path.join(args.image_directory, args.masks_subdirectory, f"{image_name}_TRAB_MASK_RAW.AIM"),
+                trab_mask,
+                image['image_position'],
+                image['image_position_original'],
+                image['image_shape_original'],
+                image['spacing'],
+                image['origin'],
+                image['processing_log'][0],
+                'Trabecular mask',
+                'UNet with post-processing',
+                VERSION
+            )
+            cort_mask, trab_mask = postprocess_masks_iterative(
+                image_data, cort_mask, trab_mask, visualize=False
+            )
+        print(f"done! ({timer()-start_time:0.3f} s)", flush=True)
         # save the cortical mask
         print("- writing cortical mask to file... ", end="")
         start_time = timer()
@@ -175,7 +213,7 @@ def main():
             'UNet with post-processing',
             VERSION
         )
-        print(f"done! ({timer()-start_time:0.3f} s)")
+        print(f"done! ({timer()-start_time:0.3f} s)", flush=True)
         # save the trabecular mask
         print("- writing trabecular mask to file... ", end="")
         start_time = timer()
@@ -192,7 +230,7 @@ def main():
             'UNet with post-processing',
             VERSION
         )
-        print(f"done! ({timer()-start_time:0.3f} s)")
+        print(f"done! ({timer()-start_time:0.3f} s)", flush=True)
 
 
 if __name__ == "__main__":

@@ -6,39 +6,50 @@ A set of utilities for visualizing images with masks overlaid in various ways.
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_image_with_mask_overlay(img,cort_mask,trab_mask,back_mask,figsize=(10,6)):
+def plot_image_with_mask_overlay(img, cort_mask, trab_mask, back_mask=None, figsize=(10,12)):
 
-    fig = plt.figure(figsize=figsize)
+    fig, ax = plt.subplots(1, 2, figsize=figsize)
 
-    mask_min = (img.shape[0]-cort_mask.shape[0])//2
-    mask_max = img.shape[0] - (img.shape[0]-cort_mask.shape[0])//2
+    mask_min = (img.shape[0] - cort_mask.shape[0]) // 2
+    mask_max = img.shape[0] - (img.shape[0] - cort_mask.shape[0]) // 2
 
-    plt.imshow(
+    ax[0].imshow(
+        img,
+        cmap='gray',
+        extent=[0, img.shape[0], 0, img.shape[1]]
+    )
+    ax[0].set_title("Original")
+
+    ax[1].imshow(
         img,
         cmap='gray',
         extent=[0,img.shape[0],0,img.shape[1]]
     )
 
-    plt.imshow(
+    ax[1].imshow(
         cort_mask,
         cmap='Greens',
         alpha=(0.5*cort_mask),
         extent=[mask_min, mask_max, mask_min, mask_max]
     )
 
-    plt.imshow(
+    ax[1].imshow(
         trab_mask,
         cmap='Blues',
         alpha=(0.5*trab_mask),
         extent=[mask_min, mask_max, mask_min, mask_max]
     )
 
-    plt.imshow(
-        back_mask,
-        cmap='Reds',
-        alpha=(0.5*back_mask),
-        extent=[mask_min, mask_max, mask_min, mask_max]
-    )
+    if back_mask is not None:
+        ax[1].imshow(
+            back_mask,
+            cmap='Reds',
+            alpha=(0.5*back_mask),
+            extent=[mask_min, mask_max, mask_min, mask_max]
+        )
+    ax[1].set_title("Segmentation overlay")
+
+    plt.show()
 
     return fig
 

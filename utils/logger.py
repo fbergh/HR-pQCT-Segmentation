@@ -5,6 +5,7 @@ Initially created for logging training results, but also turned out to be
 useful for recording results from test data and morphological analysis.
 '''
 
+import os
 import csv
 from datetime import datetime
 
@@ -17,7 +18,8 @@ class LogWriter(object):
         self.cols = cols
         self.title = title
 
-        self._write_header(parameters)
+        if not os.path.exists(filename):
+            self._write_header(parameters)
 
     def _write_header(self, parameters):
 
@@ -36,7 +38,7 @@ class LogWriter(object):
 
     def log(self, data):
 
-        with open(self.filename, 'a', newline='') as log_file:
+        with open(self.filename, 'a') as log_file:
             log_writer = csv.writer(log_file, delimiter=',')
             log_writer.writerow([data[c] for c in self.cols])
 
@@ -58,7 +60,11 @@ class Logger(object):
         if track_time:
             self.fields['time'] = 0
 
-        self._write_header(args)
+        if not os.path.exists(filename):
+            self._write_header(args)
+        else:
+            with open(self.filename, 'a', newline='') as log_file:
+                log_file.write('\n')
 
     def _write_header(self, args):
         with open(self.filename, 'w', newline='') as log_file:
@@ -85,7 +91,6 @@ class Logger(object):
             self.fields['time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with open(self.filename, 'a', newline='') as log_file:
-
             log_writer = csv.writer(log_file, delimiter=',')
             log_writer.writerow(list(self.fields.values()))
 
